@@ -22,7 +22,10 @@ let package = Package(
             name: "QuickPasteEditor",
             dependencies: [],
             path: "Sources",
-            exclude: ["Resources/Info.plist"]
+            exclude: ["Resources/Info.plist"],
+            resources: [
+                .process("Resources")
+            ]
         ),
         .testTarget(
             name: "QuickPasteEditorTests",

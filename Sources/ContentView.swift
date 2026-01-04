@@ -134,12 +134,12 @@ struct ContentView: View {
             lastChangeCount = NSPasteboard.general.changeCount
             loadHistory()
             updateCounts()
-            captureClipboardIfNeeded(force: true)
+            captureClipboardIfNeeded(force: history.isEmpty)
         }
         .onReceive(monitorTimer) { _ in
             captureClipboardIfNeeded(force: false)
         }
-        .onChange(of: selectedHistoryID) { _ in
+        .onChange(of: selectedHistoryID) {
             applySelectedHistoryToEditor()
         }
     }
@@ -281,7 +281,6 @@ struct ContentView: View {
             do {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: nil)
                 try data.write(to: url, options: [.atomic])
-                return
             } catch {
                 continue
             }
@@ -315,6 +314,11 @@ private struct ClipboardSnapshot {
 
     static func fromPasteboard(_ pasteboard: NSPasteboard) -> ClipboardSnapshot? {
         guard let item = pasteboard.pasteboardItems?.first else { return nil }
+
+        let legacyFileType = NSPasteboard.PasteboardType("NSFilenamesPboardType")
+        if item.types.contains(.fileURL) || item.types.contains(legacyFileType) {
+            return nil
+        }
 
         let plainText = pasteboard.string(forType: .string)
         var rtfData: Data?
