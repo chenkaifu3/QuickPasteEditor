@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var history: [ClipboardEntry] = []
     @State private var selectedHistoryID: ClipboardEntry.ID?
     @State private var lastChangeCount: Int = NSPasteboard.general.changeCount
+    @State private var suppressNextCapture: Bool = false
     @State private var previewHeight: CGFloat = 220
     @State private var previewDragStart: CGFloat?
 
@@ -202,7 +203,9 @@ struct ContentView: View {
             hasContent = true
         }
         if hasContent {
+            suppressNextCapture = true
             pasteboard.writeObjects([item])
+            lastChangeCount = pasteboard.changeCount
         }
     }
 
@@ -224,6 +227,11 @@ struct ContentView: View {
 
     private func captureClipboardIfNeeded(force: Bool) {
         let pasteboard = NSPasteboard.general
+        if suppressNextCapture {
+            suppressNextCapture = false
+            lastChangeCount = pasteboard.changeCount
+            return
+        }
         if !force && pasteboard.changeCount == lastChangeCount {
             return
         }
