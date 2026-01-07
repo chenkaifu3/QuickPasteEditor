@@ -7,7 +7,8 @@ struct ContentView: View {
     @State private var wordCount: Int = 0
     @State private var lineCount: Int = 0
     @State private var history: [ClipboardEntry] = []
-    @State private var selectedHistoryID: ClipboardEntry.ID?
+    @State private var selectedHistoryIDs: Set<ClipboardEntry.ID> = []
+    @State private var focusedHistoryID: ClipboardEntry.ID?
     @State private var lastChangeCount: Int = NSPasteboard.general.changeCount
     @State private var suppressNextCapture: Bool = false
     @State private var previewHeight: CGFloat = 220
@@ -21,27 +22,22 @@ struct ContentView: View {
         VStack(spacing: 0) {
             // 工具栏
             HStack {
-                Button(action: pasteFromClipboard) {
-                    Label("粘贴", systemImage: "doc.on.clipboard")
+                ToolbarButton(action: copyToClipboard) {
+                    Label("复制文本框", systemImage: "doc.on.doc")
                 }
-                .help("从剪贴板粘贴内容")
+                .help("复制文本框内容到剪贴板")
 
-                Button(action: copyToClipboard) {
-                    Label("复制", systemImage: "doc.on.doc")
-                }
-                .help("复制内容到剪贴板")
-
-                Button(action: copySelectedToClipboard) {
+                ToolbarButton(action: copySelectedToClipboard) {
                     Label("复制选中记录", systemImage: "doc.on.doc.fill")
                 }
                 .help("将选中历史记录写回剪贴板（含富文本/图片）")
 
-                Button(action: deleteSelectedHistory) {
+                ToolbarButton(action: deleteSelectedHistory) {
                     Label("删除记录", systemImage: "trash")
                 }
                 .help("删除选中的历史记录")
 
-                Button(action: clearHistory) {
+                ToolbarButton(action: clearHistory) {
                     Label("清空历史", systemImage: "trash.slash")
                 }
                 .help("清空所有历史记录")
@@ -81,7 +77,7 @@ struct ContentView: View {
             Divider()
 
             HStack(spacing: 0) {
-                List(history, selection: $selectedHistoryID) { entry in
+                List(history, selection: $selectedHistoryIDs) { entry in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(entry.previewTitle)
                             .lineLimit(2)
@@ -140,25 +136,33 @@ struct ContentView: View {
         .onReceive(monitorTimer) { _ in
             captureClipboardIfNeeded(force: false)
         }
-        .onChange(of: selectedHistoryID) {
-            applySelectedHistoryToEditor()
+        .onReceive(NotificationCenter.default.publisher(for: .suppressNextClipboardCapture)) { _ in
+            suppressNextCapture = true
         }
-    }
-
-    private func pasteFromClipboard() {
-        let pasteboard = NSPasteboard.general
-        if let clipboardString = pasteboard.string(forType: .string) {
-            text = clipboardString
-            updateCounts()
-        } else {
-            text = ""
+        .onChange(of: selectedHistoryIDs) {
+            if selectedHistoryIDs.isEmpty {
+                focusedHistoryID = nil
+                return
+            }
+            if selectedHistoryIDs.count == 1 {
+                focusedHistoryID = selectedHistoryIDs.first
+            } else if let focusedHistoryID, selectedHistoryIDs.contains(focusedHistoryID) {
+                return
+            } else {
+                focusedHistoryID = selectedHistoryIDs.first
+            }
+        }
+        .onChange(of: focusedHistoryID) {
+            applySelectedHistoryToEditor()
         }
     }
 
     private func copyToClipboard() {
         let pasteboard = NSPasteboard.general
+        suppressNextCapture = true
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        lastChangeCount = pasteboard.changeCount
     }
 
     private func clearText() {
@@ -167,19 +171,21 @@ struct ContentView: View {
     }
 
     private func deleteSelectedHistory() {
-        guard let selectedHistoryID else { return }
-        history.removeAll { $0.id == selectedHistoryID }
+        guard !selectedHistoryIDs.isEmpty else { return }
+        history.removeAll { selectedHistoryIDs.contains($0.id) }
         if history.isEmpty {
-            self.selectedHistoryID = nil
-        } else if history.first(where: { $0.id == selectedHistoryID }) == nil {
-            self.selectedHistoryID = history.first?.id
+            selectedHistoryIDs.removeAll()
+            focusedHistoryID = nil
+        } else {
+            selectedHistoryIDs = Set([history.first?.id].compactMap { $0 })
         }
         saveHistory()
     }
 
     private func clearHistory() {
         history.removeAll()
-        selectedHistoryID = nil
+        selectedHistoryIDs.removeAll()
+        focusedHistoryID = nil
         saveHistory()
     }
 
@@ -211,18 +217,19 @@ struct ContentView: View {
 
     private func applySelectedHistoryToEditor() {
         guard let selected = selectedHistoryEntry else { return }
-        if let plainText = selected.text {
+        if let plainText = selected.text,
+           !plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             text = plainText
             updateCounts()
-        } else if let rtfData = selected.rtfData {
-            if let converted = rtfDataToPlainText(rtfData) {
-                text = converted
-                updateCounts()
-            }
-        } else {
-            text = ""
-            updateCounts()
+            return
         }
+        if let rtfData = selected.rtfData, let converted = rtfDataToPlainText(rtfData) {
+            text = converted
+            updateCounts()
+            return
+        }
+        text = ""
+        updateCounts()
     }
 
     private func captureClipboardIfNeeded(force: Bool) {
@@ -249,15 +256,16 @@ struct ContentView: View {
         if history.count > maxHistoryCount {
             history.removeLast(history.count - maxHistoryCount)
         }
-        if selectedHistoryID == nil {
-            selectedHistoryID = history.first?.id
+        if selectedHistoryIDs.isEmpty {
+            selectedHistoryIDs = Set([history.first?.id].compactMap { $0 })
+            focusedHistoryID = selectedHistoryIDs.first
         }
         saveHistory()
     }
 
     private var selectedHistoryEntry: ClipboardEntry? {
-        guard let selectedHistoryID else { return nil }
-        return history.first { $0.id == selectedHistoryID }
+        guard let focusedHistoryID else { return nil }
+        return history.first { $0.id == focusedHistoryID }
     }
 
     private func updateCounts() {
@@ -271,13 +279,22 @@ struct ContentView: View {
 
     private func loadHistory() {
         let decoder = JSONDecoder()
+        var latestEntries: [ClipboardEntry]?
+        var latestDate = Date.distantPast
         for url in historyFileCandidates() {
             guard let data = try? Data(contentsOf: url) else { continue }
-            if let decoded = try? decoder.decode([ClipboardEntry].self, from: data) {
-                history = decoded
-                selectedHistoryID = history.first?.id
-                return
+            guard let decoded = try? decoder.decode([ClipboardEntry].self, from: data) else { continue }
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+            let modifiedAt = (attributes?[.modificationDate] as? Date) ?? Date.distantPast
+            if modifiedAt >= latestDate {
+                latestDate = modifiedAt
+                latestEntries = decoded
             }
+        }
+        if let latestEntries {
+            history = latestEntries
+            selectedHistoryIDs = Set([history.first?.id].compactMap { $0 })
+            focusedHistoryID = selectedHistoryIDs.first
         }
     }
 
@@ -310,6 +327,69 @@ struct ContentView: View {
             .appendingPathComponent(historyFileName))
         return candidates
     }
+}
+
+struct ToolbarButton<Label: View>: View {
+    let action: () -> Void
+    let label: () -> Label
+    @GestureState private var isPressed: Bool = false
+    @State private var bounceEffect: Bool = false
+
+    var body: some View {
+        Button(action: {
+            // 触发弹跳动画
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.4, blendDuration: 0)) {
+                bounceEffect = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.6, blendDuration: 0)) {
+                    bounceEffect = false
+                }
+            }
+            action()
+        }, label: label)
+            .buttonStyle(.borderless)
+            .foregroundStyle(isPressed ? Color.accentColor : Color.primary)
+            .scaleEffect(
+                isPressed ? 0.85 : (bounceEffect ? 1.15 : 1.0)
+            )
+            .rotationEffect(
+                .degrees(isPressed ? -2 : (bounceEffect ? 2 : 0))
+            )
+            .offset(y: isPressed ? 2 : (bounceEffect ? -3 : 0))
+            .brightness(isPressed ? 0.1 : 0)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isPressed ? Color.accentColor.opacity(0.35) : Color.clear)
+                    .scaleEffect(isPressed ? 1.05 : 1.0)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(
+                        isPressed ? Color.accentColor.opacity(0.9) : Color.clear,
+                        lineWidth: isPressed ? 2 : 0
+                    )
+            )
+            .shadow(
+                color: isPressed ? Color.accentColor.opacity(0.5) : Color.black.opacity(bounceEffect ? 0.2 : 0),
+                radius: isPressed ? 8 : (bounceEffect ? 4 : 0),
+                x: 0,
+                y: isPressed ? 4 : (bounceEffect ? 2 : 0)
+            )
+            .opacity(isPressed ? 0.8 : 1.0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.5), value: isPressed)
+            .animation(.spring(response: 0.3, dampingFraction: 0.4), value: bounceEffect)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .updating($isPressed) { _, state, _ in
+                        state = true
+                    }
+            )
+    }
+}
+
+extension Notification.Name {
+    static let suppressNextClipboardCapture = Notification.Name("SuppressNextClipboardCapture")
 }
 
 private struct ClipboardSnapshot {

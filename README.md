@@ -1,177 +1,153 @@
-# QuickPasteEditor - macOS快速粘贴文本编辑器
+# QuickPasteEditor - macOS Clipboard Manager & Text Editor
 
-一个轻量级的macOS原生文本编辑器，启动时自动从剪贴板粘贴内容，专注于快速编辑。
+A lightweight macOS native clipboard manager and text editor with clipboard history, rich text preview, and quick editing capabilities.
 
-## 功能特性
+## Features
 
-- 🚀 **快速启动**：简洁界面，快速响应
-- 📋 **自动粘贴**：启动时自动读取剪贴板内容
-- 📝 **文本编辑**：支持基本的文本编辑操作
-- 📊 **实时统计**：显示字数、行数统计
-- 🎛️ **字体调整**：可调整编辑器字体大小
-- 📋 **剪贴板操作**：一键复制、粘贴、清空
+- 🚀 **Fast & Responsive**: Clean interface with smooth performance
+- 📋 **Clipboard History**: Automatically tracks up to 200 clipboard entries
+- 📝 **Text Editing**: Full-featured text editor with live word/line count
+- 📊 **Rich Content Support**: Plain text, RTF/RTFD, and images (PNG/TIFF)
+- 🎛️ **Customizable**: Adjustable font size (10-36pt) and preview height
+- 🔄 **Smart Filtering**: Prevents internal copy operations from duplicating history
+- 🎨 **Interactive Feedback**: Animated toolbar buttons with bounce effects
+- ⌨️ **Keyboard Shortcuts**: Standard Cmd+C/V/X/A support
+- 🗂️ **Multi-Select**: Select multiple history entries for batch deletion
+- 💾 **Persistent Storage**: History auto-saves and restores on restart
 
-## 系统要求
+## System Requirements
 
-- macOS 11.0 (Big Sur) 或更高版本
-- Xcode 命令行工具 或 Xcode 14.0+
+- macOS 14.0 (Sonoma) or later
+- Xcode Command Line Tools or Xcode 15.0+
 
-## 构建说明
+## Quick Start
 
-### 1. 环境准备
-
-确保已安装Xcode命令行工具：
+### Building from Source
 
 ```bash
+# Install Xcode Command Line Tools
 xcode-select --install
-```
 
-或者安装完整Xcode（从App Store安装）。
-
-### 2. 构建应用
-
-在项目目录中执行：
-
-```bash
-# 使用Swift Package Manager构建
+# Build using Swift Package Manager
 swift build -c release
 
-# 或者使用Xcode构建（如果安装了Xcode）
-xcodebuild -scheme QuickPasteEditor -configuration Release
-```
-
-### 3. 创建macOS应用包
-
-构建成功后，可执行文件位于：
-```
-.build/release/QuickPasteEditor
-```
-
-要创建完整的`.app`应用包，可以手动创建目录结构，或使用以下脚本：
-
-```bash
-#!/bin/bash
-
-# 创建应用包目录结构
-APP_NAME="QuickPasteEditor.app"
-APP_CONTENTS="$APP_NAME/Contents"
-APP_MACOS="$APP_CONTENTS/MacOS"
-APP_RESOURCES="$APP_CONTENTS/Resources"
-
-# 创建目录
-mkdir -p "$APP_MACOS"
-mkdir -p "$APP_RESOURCES"
-
-# 复制可执行文件
-cp .build/release/QuickPasteEditor "$APP_MACOS/"
-
-# 复制Info.plist
-cp Sources/Resources/Info.plist "$APP_CONTENTS/"
-
-# 创建简单的应用图标（可选）
-# 可以使用图标工具生成或使用默认图标
-
-echo "应用包创建完成: $APP_NAME"
-```
-
-### 4. 直接运行
-
-也可以直接运行可执行文件：
-
-```bash
+# Run the app
 ./.build/release/QuickPasteEditor
 ```
 
-## 项目结构
+### Creating an App Bundle
+
+The included Python script helps create a macOS app bundle:
+
+```bash
+# Build and package the app
+swift build -c release
+python3 make_icon_transparent.py  # Optional: customize icon
+# Manually create app bundle or use packaging tools
+```
+
+## Usage
+
+### Toolbar Buttons
+
+- **Copy Text**: Copy editor content to clipboard (won't re-capture to history)
+- **Copy Selected**: Restore selected history entry (with RTF/images) to clipboard
+- **Delete**: Delete selected history entries (supports multi-select)
+- **Clear History**: Remove all clipboard history
+- **Font Size**: Adjust editor font size (10-36pt)
+
+### Keyboard Shortcuts
+
+- **Cmd+C**: Copy from editor (won't trigger history capture)
+- **Cmd+V**: Paste into editor
+- **Cmd+X**: Cut from editor
+- **Cmd+A**: Select all in editor
+- **Delete**: Remove selected history entries
+- **Cmd/Shift+Click**: Multi-select history entries
+- **Arrow Keys**: Navigate history list
+
+### How It Works
+
+1. **Auto-Capture**: Monitors system clipboard every 0.8s
+2. **Smart Filtering**: Ignores internal copies, files/folders, and duplicates
+3. **Rich Preview**: Displays formatted text and images
+4. **Quick Edit**: Click any history entry to load into editor
+5. **Persistent**: History saves to `~/Library/Application Support/QuickPasteEditor/`
+
+## Project Structure
 
 ```
 QuickPasteEditor/
-├── Package.swift              # Swift包配置文件
+├── Package.swift                    # Swift package configuration
 ├── Sources/
-│   ├── QuickPasteEditorApp.swift  # 应用主入口
-│   ├── ContentView.swift          # 主视图界面
+│   ├── QuickPasteEditorApp.swift   # App entry point
+│   ├── ContentView.swift            # Main UI view
 │   └── Resources/
-│       └── Info.plist            # 应用信息文件
-└── README.md                    # 本文档
+│       ├── Info.plist              # App metadata
+│       ├── AppIcon.icns            # App icon
+│       └── AppIcon.iconset/        # Icon source files
+├── make_icon_transparent.py        # Icon generation script
+└── README.md                       # This file
 ```
 
-## 故障排除
+## Technical Details
 
-### 问题：Swift编译器版本不匹配
+### Core Technologies
 
-如果遇到类似错误：
+- **SwiftUI**: Modern declarative UI framework
+- **NSPasteboard**: System clipboard access
+- **Combine**: Reactive programming for clipboard monitoring
+- **JSONEncoder/Decoder**: History persistence
+
+### Key Features Implementation
+
+- **Multi-Select**: Uses `Set<ClipboardEntry.ID>` for selection state
+- **Smart Capture**: Notification-based suppression for internal copies
+- **History Loading**: Automatically selects newest file among multiple candidates
+- **Animated Buttons**: Custom `ToolbarButton` view with spring animations
+- **Preview**: Dual-mode display for text/RTF content and images
+
+## Troubleshooting
+
+### Swift Compiler Version Mismatch
+
+If you see errors like:
 ```
 failed to build module 'Foundation'; this SDK is not supported by the compiler
 ```
 
-**解决方案**：
-1. 更新Xcode命令行工具：
+**Solutions**:
+1. Update Command Line Tools:
    ```bash
    sudo rm -rf /Library/Developer/CommandLineTools
    xcode-select --install
    ```
 
-2. 或者使用完整Xcode：
+2. Or use full Xcode:
    ```bash
    sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
    ```
 
-### 问题：无法导入SwiftUI
+### Clipboard Access Permissions
 
-确保：
-- macOS版本 ≥ 11.0
-- Xcode版本支持SwiftUI
+First run may request clipboard access. Grant permission in:
+1. System Settings → Privacy & Security → Accessibility
+2. Add QuickPasteEditor to the allow list
 
-### 问题：剪贴板访问权限
+### History Not Loading
 
-首次运行时，macOS可能会请求剪贴板访问权限。请在系统偏好设置中授予权限：
-1. 打开"系统偏好设置" → "安全性与隐私" → "隐私" → "辅助功能"
-2. 添加QuickPasteEditor到允许列表
+- Check file permissions in `~/Library/Application Support/QuickPasteEditor/`
+- Verify JSON file integrity
+- App automatically selects newest history file if multiple exist
 
-## 使用说明
+## Documentation
 
-1. **启动应用**：双击应用图标或运行可执行文件
-2. **自动粘贴**：应用启动时自动读取剪贴板内容
-3. **编辑文本**：在编辑器中直接修改文本
-4. **工具栏功能**：
-   - 📋 **粘贴**：从剪贴板粘贴内容（覆盖当前内容）
-   - 📄 **复制**：复制当前内容到剪贴板
-   - 🗑️ **清空**：清空编辑器内容
-   - 🔠 **字体大小**：调整编辑器字体大小
-5. **统计信息**：实时显示字数和行数
+For detailed usage instructions in Chinese, see [使用说明.md](使用说明.md).
 
-## 代码说明
+## License
 
-### 核心功能实现
+Free to use without authorization.
 
-- **剪贴板访问**：使用`NSPasteboard.general`读取系统剪贴板
-- **文本编辑**：使用SwiftUI的`TextEditor`组件
-- **实时统计**：通过`onChange`监听文本变化，计算字数和行数
-- **界面布局**：使用SwiftUI的VStack、HStack布局
+## Support
 
-### 主要文件
-
-1. **QuickPasteEditorApp.swift**：应用主入口，定义窗口大小和样式
-2. **ContentView.swift**：主视图，包含编辑器、工具栏和统计信息
-
-## 自定义修改
-
-### 修改窗口大小
-编辑`QuickPasteEditorApp.swift`中的`frame`参数：
-```swift
-.frame(minWidth: 400, minHeight: 300)  // 修改最小窗口尺寸
-```
-
-### 添加新功能
-在`ContentView.swift`中添加新按钮和功能逻辑。
-
-### 修改应用信息
-编辑`Sources/Resources/Info.plist`文件。
-
-## 许可证
-
-自由使用，无需授权。
-
-## 支持
-
-如有问题或建议，请提交Issue或联系开发者。
+For issues or suggestions, please submit an Issue on GitHub.
