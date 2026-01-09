@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Vision
 
 struct ContentView: View {
     @State private var text: String = ""
@@ -228,8 +229,60 @@ struct ContentView: View {
             updateCounts()
             return
         }
+        // 如果是图片，尝试 OCR 提取文字
+        if let imageData = selected.imageData {
+            text = "正在识别文字..."
+            updateCounts()
+            performOCR(on: imageData) { recognizedText in
+                DispatchQueue.main.async {
+                    if let recognizedText, !recognizedText.isEmpty {
+                        text = recognizedText
+                    } else {
+                        text = ""
+                    }
+                    updateCounts()
+                }
+            }
+            return
+        }
         text = ""
         updateCounts()
+    }
+
+    private func performOCR(on imageData: Data, completion: @escaping (String?) -> Void) {
+        guard let nsImage = NSImage(data: imageData),
+              let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            completion(nil)
+            return
+        }
+        
+        let request = VNRecognizeTextRequest { request, error in
+            guard error == nil,
+                  let observations = request.results as? [VNRecognizedTextObservation] else {
+                completion(nil)
+                return
+            }
+            
+            let recognizedStrings = observations.compactMap { observation in
+                observation.topCandidates(1).first?.string
+            }
+            let fullText = recognizedStrings.joined(separator: "\n")
+            completion(fullText)
+        }
+        
+        // 配置识别参数
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US"]
+        request.usesLanguageCorrection = true
+        
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try handler.perform([request])
+            } catch {
+                completion(nil)
+            }
+        }
     }
 
     private func captureClipboardIfNeeded(force: Bool) {
@@ -277,11 +330,48 @@ struct ContentView: View {
         lineCount = text.isEmpty ? 0 : text.split(separator: "\n").count
     }
 
+    /// 主存储位置：~/Library/Application Support/QuickPasteEditor/clipboard-history.json
+    private func primaryHistoryURL() -> URL {
+        let manager = FileManager.default
+        let appSupport = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport
+            .appendingPathComponent("QuickPasteEditor", isDirectory: true)
+            .appendingPathComponent(historyFileName)
+    }
+
+    /// 旧版本可能使用的候选位置（仅用于迁移）
+    private func legacyHistoryCandidates() -> [URL] {
+        var candidates: [URL] = []
+        let manager = FileManager.default
+        if let appSupport = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let bundleID = Bundle.main.bundleIdentifier ?? "QuickPasteEditor"
+            if bundleID != "QuickPasteEditor" {
+                candidates.append(appSupport.appendingPathComponent(bundleID, isDirectory: true).appendingPathComponent(historyFileName))
+            }
+        }
+        candidates.append(manager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".quickpasteeditor", isDirectory: true)
+            .appendingPathComponent(historyFileName))
+        return candidates
+    }
+
     private func loadHistory() {
         let decoder = JSONDecoder()
+        let primaryURL = primaryHistoryURL()
+        
+        // 优先从主位置加载
+        if let data = try? Data(contentsOf: primaryURL),
+           let decoded = try? decoder.decode([ClipboardEntry].self, from: data) {
+            history = decoded
+            selectedHistoryIDs = Set([history.first?.id].compactMap { $0 })
+            focusedHistoryID = selectedHistoryIDs.first
+            return
+        }
+        
+        // 主位置不存在时，尝试从旧位置迁移（只迁移一次）
         var latestEntries: [ClipboardEntry]?
         var latestDate = Date.distantPast
-        for url in historyFileCandidates() {
+        for url in legacyHistoryCandidates() {
             guard let data = try? Data(contentsOf: url) else { continue }
             guard let decoded = try? decoder.decode([ClipboardEntry].self, from: data) else { continue }
             let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -291,100 +381,48 @@ struct ContentView: View {
                 latestEntries = decoded
             }
         }
+        
         if let latestEntries {
             history = latestEntries
             selectedHistoryIDs = Set([history.first?.id].compactMap { $0 })
             focusedHistoryID = selectedHistoryIDs.first
+            // 迁移到主位置
+            saveHistory()
         }
     }
 
     private func saveHistory() {
         let encoder = JSONEncoder()
         guard let data = try? encoder.encode(history) else { return }
-        for url in historyFileCandidates() {
-            let folder = url.deletingLastPathComponent()
-            do {
-                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: nil)
-                try data.write(to: url, options: [.atomic])
-            } catch {
-                continue
-            }
+        let url = primaryHistoryURL()
+        let folder = url.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: nil)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            print("Failed to save history: \(error)")
         }
-    }
-
-    private func historyFileCandidates() -> [URL] {
-        var candidates: [URL] = []
-        let manager = FileManager.default
-        if let appSupport = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let bundleID = Bundle.main.bundleIdentifier ?? "QuickPasteEditor"
-            candidates.append(appSupport.appendingPathComponent(bundleID, isDirectory: true).appendingPathComponent(historyFileName))
-            if bundleID != "QuickPasteEditor" {
-                candidates.append(appSupport.appendingPathComponent("QuickPasteEditor", isDirectory: true).appendingPathComponent(historyFileName))
-            }
-        }
-        candidates.append(FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".quickpasteeditor", isDirectory: true)
-            .appendingPathComponent(historyFileName))
-        return candidates
     }
 }
 
 struct ToolbarButton<Label: View>: View {
     let action: () -> Void
     let label: () -> Label
-    @GestureState private var isPressed: Bool = false
-    @State private var bounceEffect: Bool = false
+    @State private var isClicked: Bool = false
 
     var body: some View {
         Button(action: {
-            // 触发弹跳动画
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.4, blendDuration: 0)) {
-                bounceEffect = true
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.6, blendDuration: 0)) {
-                    bounceEffect = false
-                }
+            // 简洁的点击反馈
+            isClicked = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                isClicked = false
             }
             action()
         }, label: label)
             .buttonStyle(.borderless)
-            .foregroundStyle(isPressed ? Color.accentColor : Color.primary)
-            .scaleEffect(
-                isPressed ? 0.85 : (bounceEffect ? 1.15 : 1.0)
-            )
-            .rotationEffect(
-                .degrees(isPressed ? -2 : (bounceEffect ? 2 : 0))
-            )
-            .offset(y: isPressed ? 2 : (bounceEffect ? -3 : 0))
-            .brightness(isPressed ? 0.1 : 0)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isPressed ? Color.accentColor.opacity(0.35) : Color.clear)
-                    .scaleEffect(isPressed ? 1.05 : 1.0)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(
-                        isPressed ? Color.accentColor.opacity(0.9) : Color.clear,
-                        lineWidth: isPressed ? 2 : 0
-                    )
-            )
-            .shadow(
-                color: isPressed ? Color.accentColor.opacity(0.5) : Color.black.opacity(bounceEffect ? 0.2 : 0),
-                radius: isPressed ? 8 : (bounceEffect ? 4 : 0),
-                x: 0,
-                y: isPressed ? 4 : (bounceEffect ? 2 : 0)
-            )
-            .opacity(isPressed ? 0.8 : 1.0)
-            .animation(.spring(response: 0.25, dampingFraction: 0.5), value: isPressed)
-            .animation(.spring(response: 0.3, dampingFraction: 0.4), value: bounceEffect)
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .updating($isPressed) { _, state, _ in
-                        state = true
-                    }
-            )
+            .opacity(isClicked ? 0.5 : 1.0)
+            .scaleEffect(isClicked ? 0.9 : 1.0)
+            .animation(.easeOut(duration: 0.1), value: isClicked)
     }
 }
 
