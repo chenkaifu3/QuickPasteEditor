@@ -365,6 +365,8 @@ struct ContentView: View {
             history = decoded
             selectedHistoryIDs = Set([history.first?.id].compactMap { $0 })
             focusedHistoryID = selectedHistoryIDs.first
+            // 确保删除所有旧位置的文件（防止回退）
+            cleanupLegacyFiles()
             return
         }
         
@@ -388,6 +390,19 @@ struct ContentView: View {
             focusedHistoryID = selectedHistoryIDs.first
             // 迁移到主位置
             saveHistory()
+            // 删除所有旧位置的文件
+            cleanupLegacyFiles()
+        }
+    }
+    
+    /// 删除所有旧位置的历史文件，防止回退加载
+    private func cleanupLegacyFiles() {
+        let manager = FileManager.default
+        for url in legacyHistoryCandidates() {
+            try? manager.removeItem(at: url)
+            // 尝试删除空目录
+            let folder = url.deletingLastPathComponent()
+            try? manager.removeItem(at: folder)
         }
     }
 
